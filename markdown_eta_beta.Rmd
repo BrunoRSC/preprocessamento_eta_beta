@@ -1,0 +1,860 @@
+---
+title: "Pré-processamento de previsões do Modelo Eta utilizando linguagem R"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+# Introdução
+
+A seguir são descritos os procedimentos e scripts para pré-processamento dos dados de previsões de variáveis meteorológicas em horizonte sazonal provenientes do Modelo Climático Regional Eta (Chou et al., 2020), adotados para a conversão dos dados binários para formato matricial (raster) utilizando a linguagem de programação R para esta finalidade. As previsões mencionadas foram disponibilizadas para aplicação em modelagem hidrológica, conforme a demanda do grupo de pesquisa vinculado ao projeto “*Incorporação de previsões climáticas e hidrológicas na gestão da alocação de água do Rio São Francisco*”. A área de abrangência das previsões do modelo Eta e a delimitação da Bacia do Rio São Francisco são apresentadas na Figura 1.
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/map_general_sf.png)**Figura 1**. Localização da Bacia do Rio São Francisco, circunscrita nos limites das previsões do Modelo Climático Regional Eta.
+
+# Estrutura dos dados
+
+As previsões em horizonte sazonal, com resolução espacial de 40 km, foram incluídas em arquivos compactados (`.tar.gz`) e disponibilizadas em servidor FTP. Cada arquivo compactado correspondente a uma determinada data de inicialização continha os seguintes arquivos em formato binário (`.bin`), e os seus respectivos arquivos descritores (`.ctl`).
+
+* `prec_Eta40km(date).bin`: *total precipitation (Kg/m²/day)*;
+* `ocis_Eta40km(date).bin`: *downward short wave at ground (W/m²)*;
+* `pslc_Eta40km(date).bin`: *surface pressure (hPa)*;
+* `tp2m_Eta40km(date).bin`: *2 metre temperature (K)*;
+* `umrl_Eta40km(date).bin`: *specific humidity (kg/kg)*;
+* `u10m_Eta40km(date).bin`: *10 metre u-wind component (m/s)*;
+* `v10m_Eta40km(date).bin`: *10 metre v-wind component (m/s)*.
+
+As previsões mencionadas foram produzidas por meio de técnica de previsão por conjunto (*ensemble*), contendo 5 membros que se iniciaram nos dias 13, 14, 15, 16 e 17 de cada mês do ano, prosseguindo por quatro meses após a data original. 
+
+# Conversão dos arquivos
+
+Foi utilizada a linguagem de programação R para a leitura dos arquivos `.bin` e posterior conversão destes em outros formatos, i.e., imagens raster com extensão `.tiff` que possibilitaram o acesso à informação (valor numérico) correspondente a cada pixel que as compuseram. A leitura dos dados binários no R foi feita a partir da função `readGradsFile` contida no pacote [readgrads](https://github.com/lhmet/readgrads?ref=https://githubhelp.com), desenvolvido para manipulação de dados oriundos do software  [GrADS](http://cola.gmu.edu/grads/) (*Grid Analysis and Display System*), utilizado comumente para visualização de dados geofísicos.  
+
+Após o download e descompactação dos arquivos `.bin` e `.ctl` referentes a uma determinada data e horário de previsão, esses foram armazenados em um mesmo diretório. A partir de então, os arquivos foram importados no R e uma função específica foi criada para a conversão do formato. Uma vez que cada arquivo binário continha diversas previsões consecutivas obtidas a partir das condições iniciais de uma determinada data, foram criados objetos `RasterStack` a partir da função descrita anteriormente contendo uma coleção de objetos `RasterLayer` com a mesma extensão espacial e resolução. Além disso, a função mencionada também definiu o sistema de referência de coordenadas (SRC) dos arquivos de saída e, neste caso, foi utilizado o datum WGS 84 (*World Geodetic System 1984*), código epsg 4326. Destaca-se que, além do pacote `readgrads`, os pacotes `raster`, desenvolvido para operações com dados espaciais em formato matricial e vetorial, e `data.table`, desenvolvido para agregação de grandes conjuntos de dados, foram requisitados para a execução do procedimento mencionado.
+
+Após a conversão dos aqruivos `.bin` em formato raster, foi possível a realização de outras manipulações dos dados e arquivos originados. Neste sentido, o recorte e aplicação de uma máscara definida por arquivos em formato vetorial (i.e., `shapefiles`) contendo a discretização e o contorno de áreas de estudo delimitadas podem ser aplicados. De outra forma, a partir da discretização apresentada de uma área definida na Figura 3, é possível calcular estatísticas zonais referentes, por exemplo, ao somatório da precipitação diária acumulada conforme os valores dos pixels que sobrepuseram a extensão de cada regionalização de uma determinada área de estudo.
+
+# Scripts
+
+Os scripts reportados a seguir foram utilizados para conversão de dados binários `.bin` em dados matriciais no formato raster `.tiff`. Ressalta-se que cada previsão diária compreendeu os horários de 0:00 (*00Z*), 6:00(*06Z*), 12:00 (*12Z*) e 18:00 hs (*18Z*). Contudo, para os valores diários de precipitação foi realizada a soma dos arquivos correspondentes à *18Z* (dia anterior), *00Z*, *06Z* e *12Z* (dia corrente) (e.g. para extrair o valor diário para o dia 01 de janeiro foram considerados os horários *18Z31DEC*, *00Z01JAN*, *06Z01JAN*, *12Z01JAN*), enquanto para as demais variáveis foi calculada a média (ou valor mínimo e máximo, para o caso da temperatura) da sequência dos horários mencionados (e.g. para o dia 01 de janeiro foram considerados os horarios *00Z01JAN*, *06Z01JAN*, *12Z01JAN* e *12Z01JAN*).
+
+## Pacotes requeridos
+* Carregando os pacotes requisitados
+
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+library(readgrads)
+library(data.table)
+library(psych)
+library(raster)
+```
+
+
+## Precipitação
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/rainfall_eta_data_structure.png)**Figura 2**. Estrutura dos dados de precipitação. A precipitação total do primeiro e do último dia de previsão é contabilizada pela soma dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: prec_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)
+  max_tstep <- max(dat$tstep)-4
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  prec <- setDT(dat)[ , list(prec_sum = sum(prec * 1000)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(prec$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- prec[prec$group %in% i , c("x", "y", "prec_sum")]
+    colnames(raster_dat)[colnames(raster_dat) == "prec_sum"] <- paste0("prec_sum_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_prec <- stack(unlist(layer))
+  
+  return(stack_prec)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'prec_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="prec_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/rainfall_eta_maps.png)**Figura 3**. Precipitação referente a primeira e última data de previsão (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Radiação solar
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/solar_radiation_eta_data_structure.png) **Figura 4**. Estrutura de dados de radiação solar. A radiação solar do primeiro e do último dia de previsão é contabilizada pela média dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: ocis_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  ocis <- setDT(dat)[ , list(ocis_mean = mean(ocis)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(ocis$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- ocis[ocis$group %in% i , c("x", "y", "ocis_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "ocis_mean"] <- paste0("ocis_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_ocis <- stack(unlist(layer))
+  
+  return(stack_ocis)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+dataframe <- readGradsFile(
+  'ocis_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="ocis_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/solar_radiation_eta_maps.png)**Figura 5**. Radiação solar referente a primeira e última data de previsão contidas no arquivo ocis_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Pressão à superfície
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/pressure_eta_data_structure.png)**Figura 6**. Estrutura de dados de pressão à superfície. A pressão do primeiro e do último dia de previsão é contabilizada pela média (mínimo ou máximo) dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: pslc_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  pslc <- setDT(dat)[ , list(pslc_mean = mean(pslc)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(pslc$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- pslc[pslc$group %in% i , c("x", "y", "pslc_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "pslc_mean"] <- paste0("pslc_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_pslc <- stack(unlist(layer))
+  
+  return(stack_pslc)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'pslc_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="pslc_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/pressure_eta_maps.png)**Figura 7**. Pressão à superfície referente a primeira e última data de previsão contidas no arquivo pslc_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Temperatura (em °C)
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/temperature_eta_data_structure.png)**Figura 8**. Estrutura de dados de temperatura. A temperatura do primeiro e do último dia de previsão é contabilizada pela média (mínimo ou máximo) dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: tp2m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  tp2m <- setDT(dat)[ , list(tp2m_mean = mean(tp2m - 273.15)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(tp2m$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- tp2m[tp2m$group %in% i , c("x", "y", "tp2m_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "tp2m_mean"] <- paste0("tp2m_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_tp2m <- stack(unlist(layer))
+  
+  return(stack_tp2m)
+}
+```
+* Obs.: para o cálculo da temperatura mínima e máxima, respectivamente, substitua o Passo 3 e 4 da função acima pelas seguintes linhas:
+```{r, eval = FALSE, message = FALSE, warning = FALSE}
+  ## Step 3
+  tp2m <- setDT(dat)[ , list(tp2m_min = min(tp2m - 273.15)), by = list(group, x, y)]
+
+  ## Step 4
+  layer <- list()
+  group <- unique(tp2m$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- tp2m[tp2m$group %in% i , c("x", "y", "tp2m_min")]
+    colnames(raster_dat)[colnames(raster_dat) == "tp2m_min"] <- paste0("tp2m_min_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+```
+
+```{r, eval = FALSE, message = FALSE, warning = FALSE}
+  ## Step 3
+  tp2m <- setDT(dat)[ , list(tp2m_max = max(tp2m - 273.15)), by = list(group, x, y)]
+
+  ## Step 4
+  layer <- list()
+  group <- unique(tp2m$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- tp2m[tp2m$group %in% i , c("x", "y", "tp2m_max")]
+    colnames(raster_dat)[colnames(raster_dat) == "tp2m_max"] <- paste0("tp2m_max_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'tp2m_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="tp2m_Eta40km2012011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/temperature_eta_maps.png)**Figura 9**. Temperatura média referente a primeira e última data de previsão contidas no arquivo tp2m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Umidade relativa
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/humidity_eta_data_structure.png)**Figura 10**. Estrutura de dados de umidade relativa. A umidade do primeiro e do último dia de previsão é contabilizada pela média dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: umrl_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  umrl <- setDT(dat)[ , list(umrl_mean = mean(umrl)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(umrl$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- umrl[umrl$group %in% i , c("x", "y", "umrl_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "umrl_mean"] <- paste0("umrl_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_umrl <- stack(unlist(layer))
+  
+  return(stack_umrl)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'umrl_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="umrl_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/humidity_eta_maps.png)**Figura 11**. Umidade relativa referente a primeira e última data de previsão contidas no arquivo umrl_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Componente zonal (u) do vento
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/u_wind_eta_data_structure.png)**Figura 12**. Estrutura de dados da componente zonal do vento. A componente u do primeiro e do último dia de previsão é contabilizada pela média dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: u10m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  u10m <- setDT(dat)[ , list(u10m_mean = mean(u10m)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(u10m$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- u10m[u10m$group %in% i , c("x", "y", "u10m_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "u10m_mean"] <- paste0("u10m_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_u10m <- stack(unlist(layer))
+  
+  return(stack_u10m)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'u10m_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="u10m_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/u_wind_eta_maps.png)**Figura 13**. Componente zonal do vento referente a primeira e última data de previsão contidas no arquivo u10m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Componente meridional (v) do vento
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/v_wind_eta_data_structure.png)**Figura 14**. Estrutura de dados da componente meridional do vento. A componente v do primeiro e do último dia de previsão é contabilizada pela média dos valores das camadas azuis destacadas (*tsteps*). Para este exemplo, assumimos o seguinte arquivo: v10m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para conversão de um dataframe em um objeto raster stack
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+raster_layers <- function(dat){
+  
+  ## Step 1
+  min_tstep <- min(dat$tstep)+1
+  max_tstep <- max(dat$tstep)-3
+  breaks <- seq(min_tstep, max_tstep, by = 4)
+  
+  ## Step 2
+  dat$group <- cut(dat$tstep, breaks)
+  dat <- dat[!is.na(dat$group), ]
+  
+  ## Step 3
+  v10m <- setDT(dat)[ , list(v10m_mean = mean(v10m)), by = list(group, x, y)]
+  
+  ## Step 4
+  layer <- list()
+  group <- unique(v10m$group)
+  j <- 1
+  for (i in group){
+    
+    raster_dat <- v10m[v10m$group %in% i , c("x", "y", "v10m_mean")]
+    colnames(raster_dat)[colnames(raster_dat) == "v10m_mean"] <- paste0("v10m_mean_", j)
+    layer[[j]] <- 
+      rasterFromXYZ(raster_dat, 
+                    res = c(0.40, 0.40), 
+                    crs = sp::CRS("+init=epsg:4326"))
+    j <- j + 1
+  }
+  
+  ## Step 5
+  stack_v10m <- stack(unlist(layer))
+  
+  return(stack_v10m)
+}
+```
+
+* Lendo os arquivos binários e convertendo em um dataframe
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("E:/backup_eta_40km/2001011312")
+
+dataframe <- readGradsFile(
+  'v10m_Eta40km2001011312.bin',
+  file.ext = ".bin",
+  convert2dataframe = TRUE,
+  padding.bytes = FALSE
+)
+
+headTail(dataframe)
+```
+
+* Aplicando a função para criar um objeto raster stack
+```{r, eval = TRUE, message = FALSE, warning = FALSE}
+raster <- raster_layers(dat = dataframe)
+crs(raster)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2012011312")
+writeRaster(raster, filename="v10m_Eta40km2001011312.tif", format="GTiff")
+```
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/v_wind_eta_maps.png)**Figura 15**. Componente meridional do vento referente a primeira e última data de previsão contidas no arquivo v10m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs).
+
+
+
+
+
+## Velocidade do vento
+
+![Alt text](D:/Users/bruno/Documents/r_projects/project_markdown_eta_data/wind_speed_calculation.jpg)**Figura 16**. Fórmulas para calcular e converter a velocidade do vento. Aqui vamos usar os componentes do zonal e meridional vento (u e v, respectivamente) para calcular a velocidade do vento a 10 m e depois convertê-la para a velocidade do vento a 2 m. Para este exemplo, assumimos os seguintes arquivos: u10m_Eta40km2001011312.bin e v10m_Eta40km2001011312.bin (data de inicialização 13/01/2001 12:00 hs). Neste caso, a primeira data de previsão correspondeu ao dia 14/01/2001.
+
+* Carregando a função para converter a velocidade do vento de 10m para 2m
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+cal_fun <- function(x) {
+  x <- x * 0.747951075167944
+}
+```
+
+* Carregando os dados com as componentes do vento u e v como objetos raster stack
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+u12 <- stack("u10m_Eta40km2001011312.tif")
+v12 <- stack("v10m_Eta40km2001011312.tif")
+```
+
+* Calculando a velocidade do vento a 10m e convertendo para 2m
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+w12 <- overlay(u12, v12, fun=function(x, y) { sqrt(x^2 + y^2) } )
+w12_2m <- calc(w12, fun = cal_fun)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+writeRaster(w12, filename="w10m_Eta40km2001011312.tif", format="GTiff")
+writeRaster(w12_2m, filename="w02m_Eta40km2001011312.tif", format="GTiff")
+```
+
+## Evapotranspiração
+
+O script a seguir foi utilizado para o cálculo da evapotranspiração de referência (ETo, em mm) conforme o método de Penmam-Monteith (Allen et al., 1998) a partir de demais variáveis meteorológicas fornecidas pelo modelo Eta. Para esta finalidade foram utilizados os dados de temperatura média (°C), máxima (°C) e mínima (°C), velocidade do vento a 10 m de altura (m/s), umidade relativa do ar (%) e radiação solar (MJ/m²). A velocidade do vento a 10m é convertida para 2m na função de cálculo de ETo. Além disso, foram considerados os dados de latitude e de elevação, estes últimos determinados para as coordenadas geográficas dos pontos de grade do modelo Eta segundo o produto *ASTER Global Digital Elevation Model NetCDF V003*, e obtidos online pelo *Application for Extracting and Exploring Analysis Ready Samples* [AρρEEARS](https://appeears.earthdatacloud.nasa.gov/) (AppEEARS Team, 2022). A função utilizada para o cálculo da ETo foi aquela desenvolvida para o *ShinyApp Easy Reference Evapotranspiration* [Easy-ETo](https://github.com/daniel-althoff/Easy-ETo) (Althoff, 2019). Esta função também calcula a ETo com base nos métodos de Hargreaves-Samani (Hargreaves and Samani, 1982) e Priestley-Taylor (Priestley and Taylor, 1972).
+
+* Carregando os pacotes necessários
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+library(raster)
+library(data.table)
+library(psych)
+
+library(dplyr)
+library(cartomisc)
+library(purrr)
+```
+
+* Carregando a função para o cálculo da ETo
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+ETo_diario_calc <- function(tmed, tmax, tmin, urmed, rad, vmed, lat, alt, date) {
+  lat <- lat*pi/180
+  J <- as.numeric(format(date, "%j"))
+  dr <- 1+0.033*cos(2*pi*J/365)
+  gamma <- 0.409*sin(2*pi*J/365-1.39)
+  ws <- acos(-tan(lat)*tan(gamma))
+  Rg <- 24*60/pi*0.0820*dr*(ws*sin(lat)*sin(gamma)+cos(lat)*cos(gamma)*sin(ws))
+  P <- 101.3*((293-0.0065*alt)/293)^5.26 
+  p <- 1013 
+  lamb <- 2.45 
+  eoTmax <- as.data.frame(0.6108*exp((17.27*tmax)/(tmax+237.3)))
+  eoTmin <- as.data.frame(0.6108*exp((17.27*tmin)/(tmin+237.3)))
+  es <- as.data.frame((eoTmax+eoTmin)/2) 
+  ea <- (urmed*(eoTmax+eoTmin)/2)/100
+  for (i in 1:nrow(ea)){
+    if (ea[i,] > es[i,]) (ea[i,] <- es[i,])
+  }
+  
+  delta <- as.data.frame(4098*(0.6108*exp(17.27*tmed/(tmed+273.3)))/((tmed+237.3)^2))
+  psi <- 0.665*10^(-3)*P
+  albedo <- 0.23
+  Rns <- as.data.frame((1-albedo)*rad)
+  Rso <- (0.75+(2*10^-5)*alt)*Rg
+  Rnl <- 4.903*10^(-9)*(((tmax+273.15)^4+(tmin+273.15)^4)/2)*(0.34-0.14*sqrt(ea))*(1.35*rad/Rso-0.35)
+  Rn <- Rns-Rnl
+  u2 <- (vmed*4.87/(log(67.8*10-5.42))) %>% tbl_df()
+  ETo <- (0.408*delta*Rn+psi*(900/(tmed+273))*u2*(es-ea))/(delta+psi*(1+0.34*u2))
+  names(ETo) <- 'ETo'
+  ETo <- ETo %>% mutate(Date = date,
+                        HS = 0.0023*((tmax-tmin)^0.5)*(tmed+17.8)*Rg/2.45,
+                        PT = as.numeric(unlist(1.26*(delta/(delta+psi))*Rn/2.45)))
+}
+```
+
+* Carregando as variáveis
+
+* Elevação
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/eto_from_eta/eta_elevation_data/")
+raster_elev <- raster("eta40km_elevation.tif")
+dataframe <- as.data.frame(raster_elev, xy = TRUE)
+colnames(dataframe) <- c("x", "y", "elev")
+headTail(dataframe)
+
+data_alt <- dataframe
+rm(dataframe)
+```
+
+
+* Radiação solar
+```{r, eval = TRUE, message = TRUE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+stack_file <- stack("ocis_Eta40km2001011312.tif")
+```
+
+* Rotulando o intervalo de dados a partir do primeiro dia de previsão e convertendo em um dataframe
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+layers <- nlayers(stack_file)
+dates <- as.character(seq(as.Date("2001/1/14"), by = "day", length.out = layers))
+
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "ocis")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+```
+
+* Convertendo a radiação para MJ/m²/day
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+data_ocis <- melted
+data_ocis$ocis <- melted$ocis/(1000000/86400)
+rm(stack_file, dataframe, melted)
+```
+
+* Temperatura média
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+stack_file <- stack("tp2m_Eta40km2001011312.tif")
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "tp2m")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+data_tp2m <- melted
+rm(stack_file, dataframe, melted)
+```
+
+* Temperatura máxima
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+stack_file <- stack("tp2m_Eta40km2001011312_max.tif")
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "tp2m_max")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+data_tp2m_max <- melted
+rm(stack_file, dataframe, melted)
+```
+
+* Temperatura mínima
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+stack_file <- stack("tp2m_Eta40km2001011312_min.tif")
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "tp2m_min")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+data_tp2m_min <- melted
+rm(stack_file, dataframe, melted)
+```
+
+* Velocidade do vento a 10m
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/2001011312")
+stack_file <- stack("w10m_Eta40km2001011312.tif")
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "w02m")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+data_w02m <- melted
+rm(stack_file, dataframe, melted)
+```
+
+* Umidade relativa
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_eta40km/2001/umrl_2m")
+stack_file <- stack("umrl_Eta40km2001011312.tif")
+names(stack_file) <- dates
+dataframe <- as.data.frame(stack_file, xy = TRUE)
+melted <- reshape2::melt(dataframe, id = c("x","y"))
+colnames(melted) <- c("x", "y", "date", "umrl")
+melted$date <- gsub('X', '', melted$date)
+melted$date <- as.Date(melted$date, format = "%Y.%m.%d")
+data_umrl <- melted
+rm(stack_file, dataframe, melted)
+```
+
+* Combinando as variáveis para o cálculo da ETo
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+variables <- cbind(data_tp2m$tp2m, data_tp2m_max$tp2m_max, data_tp2m_min$tp2m_min, data_umrl$umrl,
+                   data_ocis$ocis, data_w02m$w02m, data_ocis$y, data_alt$elev)
+
+variables <- as.data.frame(variables)
+variables$V9 <- data_ocis$date
+colnames(variables)<- c("tmed","tmax", "tmin", "urmed", "rad", "vmed", "lat", "alt", "date")
+```
+
+* Calculando a ETo
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+et_calc <- ETo_diario_calc(variables$tmed, variables$tmax, variables$tmin, variables$urmed,
+                           variables$rad, variables$vmed, variables$lat, variables$alt, variables$date)
+```
+
+* Selecionando apenas a ETo calculada pelo método de Penman-Monteith
+```{r, eval = TRUE, results = 'hide', message = FALSE, warning = FALSE}
+etpm <- cbind(data_ocis$x, data_ocis$y, et_calc$ETo)
+etpm <- as.data.frame(etpm)
+colnames(etpm)<- c("x","y", "etpm")
+etpm$date <- data_ocis$date
+
+etpm_stack <- etpm %>% 
+  group_split(date) %>% 
+  map(~rasterFromXYZ(.x[,c("x", "y", "etpm")])) %>%
+  stack()
+crs(etpm_stack) <- "+init=epsg:4326"
+names(etpm_stack) <- unique(etpm$date)
+```
+
+* Exportando os arquivos em formato .tiff
+```{r, eval = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+setwd("D:/Users/bruno/Documents/pos_doc/data_Eta40km/2001/etpm")
+writeRaster(etpm_stack, filename="etpm_Eta40km2002011312.tif", format="GTiff")
+```
+
+# Referências
+
+* Althoff, D. Easy Reference Evapotranspiration (Easy-ETo). 2019. Disponível em: [https://github.com/daniel-althoff/Easy-ETo](https://github.com/daniel-althoff/Easy-ETo)
+
+* AppEEARS Team. Application for Extracting and Exploring Analysis Ready Samples (AppEEARS). Ver. 3.1. NASA EOSDIS Land Processes Distributed Active Archive Center (LP DAAC), USGS/Earth Resources Observation and Science (EROS) Center, Sioux Falls, South Dakota, USA. Disponível em [https://appeears.earthdatacloud.nasa.gov/](https://appeears.earthdatacloud.nasa.gov/)
+
+* Chou, S. C.; Dereczynski, C.; Gomes, J. L.; Pesquero, J. F.; de Avila, A. M. H.; Resende, N. C.; de Carvalho, L. F. A.; Ruiz-Cárdenas, R.; de Souza, C. R.; Bustamante, J. F. F. Ten-year seasonal climate reforecasts over South America using the Eta Regional Climate Model. Anais da Academia Brasileira de Ciências, v.92(3), p.1–24, 2020. DOI: https://doi.org/10.1590/0001-3765202020181242
+
+* Hargreaves G.H.; Samani, Z.A. Estimating potential evapotranspiration. Journal of the Irrigation and Drainage Division 108:225–230, 1982.
+
+* Priestley C.H.B.; Taylor, R.J. On the assessment of surface heat flux and evaporation using large-scale parameters. Monthly weather review 100:81–92, 1972.
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
